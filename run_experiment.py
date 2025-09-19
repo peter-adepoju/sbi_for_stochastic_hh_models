@@ -2,10 +2,6 @@
 
 """
 The main entry point for launching a full experimental run.
-
-This script reads a YAML configuration file, sets up the experiment for one or
-more random seeds, and orchestrates the data generation and model training
-for each seed.
 """
 
 import argparse
