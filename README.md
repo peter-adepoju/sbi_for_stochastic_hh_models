@@ -22,7 +22,7 @@ Our primary finding is that the multifidelity approach (MF-NPE) can produce post
 
 | ![NLTP Comparison](results/nltp_comparison.png) | ![Posterior Comparison](results/posterior_comparison.pdf) |
 |:---:|:---:|
-| **Figure 1: NLTP Performance.** Negative Log-Probability of the True Parameters (NLTP, lower is better) vs. number of high-fidelity simulations. MF-NPE variants consistently outperform standard NPE. | **Figure 2: Posterior Accuracy.** Pairwise posteriors for MF-NPE (right) are sharper and more accurate than for standard NPE (left), despite using 10x fewer high-fidelity simulations. |
+| **Figure 1: NLTP Performance.** Negative Log-Probability of the True Parameters (NLTP, lower is better) vs. Methods. MF-NPE variants consistently outperform standard NPE. | **Figure 2: Posterior Accuracy.** Pairwise posteriors for MF-NPE (right) are sharper and more accurate than for standard NPE (left), despite using 10x fewer high-fidelity simulations. |
 
 ---
 
