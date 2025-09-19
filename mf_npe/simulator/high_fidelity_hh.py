@@ -3,226 +3,224 @@
 """
 High-fidelity Hodgkin-Huxley neuron model with stochastic ion channel kinetics.
 
-This simulator implements the 8-state sodium channel and 5-state potassium channel Markov models, 
-using a Gillespie stochastic simulation algorithm (SSA) to simulate individual channel transitions.
+This file provides a standalone function `markov_hh` that implements the
+8-state sodium and 5-state potassium channel Markov models using a Gillespie
+stochastic simulation algorithm (SSA).
 
 The model implementation is adapted from:
 Goldwyn, J. H., & Shea-Brown, E. (2011). The what and where of adding channel noise 
 to the Hodgkin-Huxley equations. PLoS computational biology, 7(11), e1002247.
 """
 
-from typing import Callable, Tuple
-
 import numpy as np
-
+from typing import Callable
 
 # -----------------------------------------------------------------------------
-# Numerically-stable rate functions and helpers
+# Numerically‐stable helpers (clip inside exp to avoid under/overflow)
 # -----------------------------------------------------------------------------
+def _Exp(z):
+    return np.exp(np.clip(z, -500, None))
 
-def _efun(z: np.ndarray) -> np.ndarray:
-    """Numerically stable version of z / (exp(z) - 1)."""
-    # Clip to avoid overflow in np.exp
-    z = np.clip(z, -500, 500)
+def _efun(x, y):
     return np.where(
-        np.abs(z) < 1e-6,
-        1 - z / 2,          # Taylor expansion for small z
-        z / (np.exp(z) - 1)
+        np.abs(x / y) < 1e-6,
+        y * (1 - x / (2 * y)),
+        x / (_Exp(x / y) - 1)
     )
 
-# --- Rate functions for gating variables (m, h, n) ---
+# -----------------------------------------------------------------------------
+# Rate functions for gating variables (m, h, n)
 # Defined on relative voltage V_rel = V - V_rest
+# -----------------------------------------------------------------------------
+def alpha_m(V): return 0.1 * _efun(25.0 - V, 10.0)
+def beta_m(V):  return 4.0 * _Exp(-V / 18.0)
+def alpha_h(V): return 0.07 * _Exp(-V / 20.0)
+def beta_h(V):  return 1.0 / (_Exp((30.0 - V) / 10.0) + 1.0)
+def alpha_n(V): return 0.01 * _efun(10.0 - V, 10.0)
+def beta_n(V):  return 0.125 * _Exp(-V / 80.0)
 
-def _alpha_m(V_rel: float) -> float:
-    return 10.0 * _efun((V_rel - 25.0) / -10.0)
+def tau_x(a, b, V): return 1.0 / (a(V) + b(V))
+def x_inf(a, b, V): return a(V) * tau_x(a, b, V)
 
-def _beta_m(V_rel: float) -> float:
-    return 4.0 * np.exp(V_rel / -18.0)
+# -----------------------------------------------------------------------------
+# Markov chain Gillespie update function
+# -----------------------------------------------------------------------------
+def markov_chain_fraction(V, NaStateIn, KStateIn, t, dt, V_rest):
+    Nastate = NaStateIn.copy()
+    Kstate  = KStateIn.copy()
+    tswitch = t
 
-def _alpha_h(V_rel: float) -> float:
-    return 0.07 * np.exp(V_rel / -20.0)
+    while tswitch < (t + dt):
+        V_rel = V - V_rest
 
-def _beta_h(V_rel: float) -> float:
-    return 1.0 / (np.exp((V_rel - 30.0) / 10.0) + 1.0)
+        rate = np.zeros(28)
+        rate[0]  = 3 * alpha_m(V_rel) * Nastate[0, 0]
+        rate[1]  = rate[0]  + 2 * alpha_m(V_rel) * Nastate[1, 0]
+        rate[2]  = rate[1]  + 1 * alpha_m(V_rel) * Nastate[2, 0]
+        rate[3]  = rate[2]  + 3 * beta_m(V_rel)  * Nastate[3, 0]
+        rate[4]  = rate[3]  + 2 * beta_m(V_rel)  * Nastate[2, 0]
+        rate[5]  = rate[4]  + 1 * beta_m(V_rel)  * Nastate[1, 0]
+        rate[6]  = rate[5]  +       alpha_h(V_rel) * Nastate[0, 0]
+        rate[7]  = rate[6]  +       alpha_h(V_rel) * Nastate[1, 0]
+        rate[8]  = rate[7]  +       alpha_h(V_rel) * Nastate[2, 0]
+        rate[9]  = rate[8]  +       alpha_h(V_rel) * Nastate[3, 0]
+        rate[10] = rate[9]  +       beta_h(V_rel)  * Nastate[0, 1]
+        rate[11] = rate[10] +       beta_h(V_rel)  * Nastate[1, 1]
+        rate[12] = rate[11] +       beta_h(V_rel)  * Nastate[2, 1]
+        rate[13] = rate[12] +       beta_h(V_rel)  * Nastate[3, 1]
+        rate[14] = rate[13] + 3 * alpha_m(V_rel) * Nastate[0, 1]
+        rate[15] = rate[14] + 2 * alpha_m(V_rel) * Nastate[1, 1]
+        rate[16] = rate[15] + 1 * alpha_m(V_rel) * Nastate[2, 1]
+        rate[17] = rate[16] + 3 * beta_m(V_rel)  * Nastate[3, 1]
+        rate[18] = rate[17] + 2 * beta_m(V_rel)  * Nastate[2, 1]
+        rate[19] = rate[18] + 1 * beta_m(V_rel)  * Nastate[1, 1]
+        rate[20] = rate[19] + 4 * alpha_n(V_rel) * Kstate[0]
+        rate[21] = rate[20] + 3 * alpha_n(V_rel) * Kstate[1]
+        rate[22] = rate[21] + 2 * alpha_n(V_rel) * Kstate[2]
+        rate[23] = rate[22] + 1 * alpha_n(V_rel) * Kstate[3]
+        rate[24] = rate[23] + 4 * beta_n(V_rel)  * Kstate[4]
+        rate[25] = rate[24] + 3 * beta_n(V_rel)  * Kstate[3]
+        rate[26] = rate[25] + 2 * beta_n(V_rel)  * Kstate[2]
+        rate[27] = rate[26] + 1 * beta_n(V_rel)  * Kstate[1]
 
-def _alpha_n(V_rel: float) -> float:
-    return 1.0 * _efun((V_rel - 10.0) / -10.0)
+        totalrate = rate[27]
+        if totalrate <= 1e-9: # Avoid division by zero for very small rates
+            break
 
-def _beta_n(V_rel: float) -> float:
-    return 0.125 * np.exp(V_rel / -80.0)
+        # Exponential waiting time
+        tupdate = -np.log(np.random.rand()) / totalrate
+        tswitch += tupdate
+        if tswitch >= (t + dt):
+            break
 
+        # Determine which transition occurs
+        r = totalrate * np.random.rand()
 
+        if r < rate[0]:    Nastate[0,0] -= 1; Nastate[1,0] += 1
+        elif r < rate[1]:  Nastate[1,0] -= 1; Nastate[2,0] += 1
+        elif r < rate[2]:  Nastate[2,0] -= 1; Nastate[3,0] += 1
+        elif r < rate[3]:  Nastate[3,0] -= 1; Nastate[2,0] += 1
+        elif r < rate[4]:  Nastate[2,0] -= 1; Nastate[1,0] += 1
+        elif r < rate[5]:  Nastate[1,0] -= 1; Nastate[0,0] += 1
+        elif r < rate[6]:  Nastate[0,0] -= 1; Nastate[0,1] += 1
+        elif r < rate[7]:  Nastate[1,0] -= 1; Nastate[1,1] += 1
+        elif r < rate[8]:  Nastate[2,0] -= 1; Nastate[2,1] += 1
+        elif r < rate[9]:  Nastate[3,0] -= 1; Nastate[3,1] += 1
+        elif r < rate[10]: Nastate[0,1] -= 1; Nastate[0,0] += 1
+        elif r < rate[11]: Nastate[1,1] -= 1; Nastate[1,0] += 1
+        elif r < rate[12]: Nastate[2,1] -= 1; Nastate[2,0] += 1
+        elif r < rate[13]: Nastate[3,1] -= 1; Nastate[3,0] += 1
+        elif r < rate[14]: Nastate[0,1] -= 1; Nastate[1,1] += 1
+        elif r < rate[15]: Nastate[1,1] -= 1; Nastate[2,1] += 1
+        elif r < rate[16]: Nastate[2,1] -= 1; Nastate[3,1] += 1
+        elif r < rate[17]: Nastate[3,1] -= 1; Nastate[2,1] += 1
+        elif r < rate[18]: Nastate[2,1] -= 1; Nastate[1,1] += 1
+        elif r < rate[19]: Nastate[1,1] -= 1; Nastate[0,1] += 1
+        elif r < rate[20]: Kstate[0] -= 1; Kstate[1] += 1
+        elif r < rate[21]: Kstate[1] -= 1; Kstate[2] += 1
+        elif r < rate[22]: Kstate[2] -= 1; Kstate[3] += 1
+        elif r < rate[23]: Kstate[3] -= 1; Kstate[4] += 1
+        elif r < rate[24]: Kstate[4] -= 1; Kstate[3] += 1
+        elif r < rate[25]: Kstate[3] -= 1; Kstate[2] += 1
+        elif r < rate[26]: Kstate[2] -= 1; Kstate[1] += 1
+        else:              Kstate[1] -= 1; Kstate[0] += 1
+
+    return Nastate, Kstate
+
+# -----------------------------------------------------------------------------
+# Main High-Fidelity HH Simulation Function
+# -----------------------------------------------------------------------------
+def markov_hh(
+    t, Ifunc, NNa, NK, NoiseModel="MarkovChain", Area_for_C=1.0,
+    gNa=120.0, gK=36.0, gL=0.3
+):
+    """
+    Returns Y: array with columns [t, V, NaFraction, KFraction]
+    """
+    dt = t[1] - t[0]
+    nt = len(t)
+    V_rest = -65.0
+
+    C = 1.0 * Area_for_C
+    E_Na = 115.0 + V_rest
+    E_K = -12.0 + V_rest
+    E_L = 10.6 + V_rest
+
+    m0 = x_inf(alpha_m, beta_m, 0.0)
+    h0 = x_inf(alpha_h, beta_h, 0.0)
+    n0 = x_inf(alpha_n, beta_n, 0.0)
+    V0 = V_rest
+
+    MCNa = np.zeros((4,2))
+    MCNa[0,0] = round(NNa * (1-m0)**3 * (1-h0))
+    MCNa[1,0] = round(NNa * 3*m0*(1-m0)**2 * (1-h0))
+    MCNa[2,0] = round(NNa * 3*m0**2*(1-m0) * (1-h0))
+    MCNa[3,0] = round(NNa * m0**3 * (1-h0))
+    MCNa[0,1] = round(NNa * (1-m0)**3 * h0)
+    MCNa[1,1] = round(NNa * 3*m0*(1-m0)**2 * h0)
+    MCNa[2,1] = round(NNa * 3*m0**2*(1-m0) * h0)
+    MCNa[3,1] = NNa - np.sum(MCNa)
+
+    MCK = np.zeros(5)
+    MCK[0] = round(NK * (1-n0)**4)
+    MCK[1] = round(NK * 4*n0*(1-n0)**3)
+    MCK[2] = round(NK * 6*n0**2*(1-n0)**2)
+    MCK[3] = round(NK * 4*n0**3*(1-n0))
+    MCK[4] = NK - np.sum(MCK[:4])
+
+    Y = np.zeros((nt, 4))
+    Y[0] = [t[0], V0, MCNa[3,1]/NNa if NNa > 0 else 0, MCK[4]/NK if NK > 0 else 0]
+
+    for i in range(1, nt):
+        I_ext = Ifunc(t[i-1])
+        
+        MCNa, MCK = markov_chain_fraction(V0, MCNa, MCK, t[i-1], dt, V_rest)
+        NaFraction = MCNa[3,1] / NNa if NNa > 0 else 0
+        KFraction  = MCK[4] / NK if NK > 0 else 0
+
+        g_tot = gNa * NaFraction + gK * KFraction + gL
+        I_ion = (gNa * NaFraction * E_Na + gK * KFraction * E_K + gL * E_L)
+        V_inf = (I_ion + I_ext) / g_tot
+        
+        # Avoid division by zero if g_tot is zero
+        if g_tot > 1e-9:
+            tauV  = C / g_tot
+            V_new = V_inf + (V0 - V_inf) * _Exp(-dt / tauV)
+        else:
+            V_new = V0
+        
+        Y[i] = [t[i], V_new, NaFraction, KFraction]
+        V0 = V_new
+        
+    return Y
+
+# -----------------------------------------------------------------------------
+# Compatibility Wrapper Class
+# -----------------------------------------------------------------------------
 class MarkovHHSimulator:
     """
-    High-fidelity Hodgkin-Huxley simulator with Markov chain channel kinetics.
+    A thin wrapper around the procedural `markov_hh` function to maintain
+    compatibility with the class-based project architecture.
     """
-    # This static list defines the 28 possible state transitions for the channels.
-    _STATE_CHANGES = [
-        # Na_m open (0-2)
-        ((0, (0, 0), -1), (0, (1, 0), 1)), ((0, (1, 0), -1), (0, (2, 0), 1)), ((0, (2, 0), -1), (0, (3, 0), 1)),
-        # Na_m close (3-5)
-        ((0, (3, 0), -1), (0, (2, 0), 1)), ((0, (2, 0), -1), (0, (1, 0), 1)), ((0, (1, 0), -1), (0, (0, 0), 1)),
-        # Na_h inactivate (6-9)
-        ((0, (0, 0), -1), (0, (0, 1), 1)), ((0, (1, 0), -1), (0, (1, 1), 1)), ((0, (2, 0), -1), (0, (2, 1), 1)), ((0, (3, 0), -1), (0, (3, 1), 1)),
-        # Na_h recover (10-13)
-        ((0, (0, 1), -1), (0, (0, 0), 1)), ((0, (1, 1), -1), (0, (1, 0), 1)), ((0, (2, 1), -1), (0, (2, 0), 1)), ((0, (3, 1), -1), (0, (3, 0), 1)),
-        # Inactivated Na_m open (14-16)
-        ((0, (0, 1), -1), (0, (1, 1), 1)), ((0, (1, 1), -1), (0, (2, 1), 1)), ((0, (2, 1), -1), (0, (3, 1), 1)),
-        # Inactivated Na_m close (17-19)
-        ((0, (3, 1), -1), (0, (2, 1), 1)), ((0, (2, 1), -1), (0, (1, 1), 1)), ((0, (1, 1), -1), (0, (0, 1), 1)),
-        # K_n open (20-23)
-        ((1, 0, -1), (1, 1, 1)), ((1, 1, -1), (1, 2, 1)), ((1, 2, -1), (1, 3, 1)), ((1, 3, -1), (1, 4, 1)),
-        # K_n close (24-27)
-        ((1, 4, -1), (1, 3, 1)), ((1, 3, -1), (1, 2, 1)), ((1, 2, -1), (1, 1, 1)), ((1, 1, -1), (1, 0, 1)),
-    ]
-
     def __init__(self,
                  g_na: float = 120.0, g_k: float = 36.0, g_l: float = 0.3,
-                 e_na: float = 50.0, e_k: float = -77.0, e_l: float = -54.4,
-                 c_m: float = 1.0, v_rest: float = -65.0,
                  n_na_channels: int = 6000, n_k_channels: int = 1800):
-        """
-        Initializes the simulator with model parameters.
-
-        Args:
-            g_na, g_k, g_l: Max conductances (mS/cm²).
-            e_na, e_k, e_l: Reversal potentials (mV). These are absolute, not relative.
-            c_m: Membrane capacitance (µF/cm²).
-            v_rest: Resting membrane potential (mV).
-            n_na_channels, n_k_channels: Total number of channels.
-        """
-        self.g_na, self.g_k, self.g_l = g_na, g_k, g_l
-        self.e_na, self.e_k, self.e_l = e_na, e_k, e_l
-        self.c_m = c_m
-        self.v_rest = v_rest
+        self.g_na = g_na
+        self.g_k = g_k
+        self.g_l = g_l
         self.n_na = n_na_channels
         self.n_k = n_k_channels
-
-        # Initial steady-state gating values at V_rel = 0
-        m0 = _alpha_m(0.0) / (_alpha_m(0.0) + _beta_m(0.0))
-        h0 = _alpha_h(0.0) / (_alpha_h(0.0) + _beta_h(0.0))
-        n0 = _alpha_n(0.0) / (_alpha_n(0.0) + _beta_n(0.0))
-
-        # Initialize Markov state populations based on steady-state probabilities
-        self.na_channel_states = np.zeros((4, 2))  # (m_state, h_state)
-        self.na_channel_states[0, 0] = np.round(self.n_na * (1-m0)**3 * (1-h0))
-        self.na_channel_states[1, 0] = np.round(self.n_na * 3*m0*(1-m0)**2 * (1-h0))
-        self.na_channel_states[2, 0] = np.round(self.n_na * 3*m0**2*(1-m0) * (1-h0))
-        self.na_channel_states[3, 0] = np.round(self.n_na * m0**3 * (1-h0))
-        self.na_channel_states[0, 1] = np.round(self.n_na * (1-m0)**3 * h0)
-        self.na_channel_states[1, 1] = np.round(self.n_na * 3*m0*(1-m0)**2 * h0)
-        self.na_channel_states[2, 1] = np.round(self.n_na * 3*m0**2*(1-m0) * h0)
-        self.na_channel_states[3, 1] = np.round(self.n_na * m0**3 * h0)
-        # Ensure total is correct due to rounding
-        self.na_channel_states[3, 1] += self.n_na - np.sum(self.na_channel_states)
-
-        self.k_channel_states = np.zeros(5) # (n_state)
-        self.k_channel_states[0] = np.round(self.n_k * (1-n0)**4)
-        self.k_channel_states[1] = np.round(self.n_k * 4*n0*(1-n0)**3)
-        self.k_channel_states[2] = np.round(self.n_k * 6*n0**2*(1-n0)**2)
-        self.k_channel_states[3] = np.round(self.n_k * 4*n0**3*(1-n0))
-        self.k_channel_states[4] = np.round(self.n_k * n0**4)
-        # Ensure total is correct
-        self.k_channel_states[4] += self.n_k - np.sum(self.k_channel_states)
-
-    def _gillespie_step(self, v_membrane: float, t_start: float, dt: float) -> None:
-        """
-        Performs one Gillespie SSA step to update channel states over dt.
-        """
-        t_switch = t_start
-        v_rel = v_membrane - self.v_rest
-
-        am, bm = _alpha_m(v_rel), _beta_m(v_rel)
-        ah, bh = _alpha_h(v_rel), _beta_h(v_rel)
-        an, bn = _alpha_n(v_rel), _beta_n(v_rel)
-        
-        # State arrays for easier access
-        na_s = self.na_channel_states
-        k_s = self.k_channel_states
-        
-        while t_switch < (t_start + dt):
-            propensities = np.array([
-                3*am*na_s[0,0], 2*am*na_s[1,0], 1*am*na_s[2,0],
-                3*bm*na_s[3,0], 2*bm*na_s[2,0], 1*bm*na_s[1,0],
-                ah*na_s[0,0], ah*na_s[1,0], ah*na_s[2,0], ah*na_s[3,0],
-                bh*na_s[0,1], bh*na_s[1,1], bh*na_s[2,1], bh*na_s[3,1],
-                3*am*na_s[0,1], 2*am*na_s[1,1], 1*am*na_s[2,1],
-                3*bm*na_s[3,1], 2*bm*na_s[2,1], 1*bm*na_s[1,1],
-                4*an*k_s[0], 3*an*k_s[1], 2*an*k_s[2], 1*an*k_s[3],
-                4*bn*k_s[4], 3*bn*k_s[3], 2*bn*k_s[2], 1*bn*k_s[1]
-            ])
-
-            total_rate = np.sum(propensities)
-            if total_rate == 0:
-                break
-
-            # Draw waiting time from an exponential distribution
-            t_update = -np.log(np.random.rand()) / total_rate
-            t_switch += t_update
-            if t_switch >= (t_start + dt):
-                break
-
-            # Determine which transition occurs
-            r = total_rate * np.random.rand()
-            cumulative_rates = np.cumsum(propensities)
-            reaction_index = np.searchsorted(cumulative_rates, r, side='right')
-            
-            # Apply the state change
-            state_updates = self._STATE_CHANGES[reaction_index]
-            channel_arrays = [self.na_channel_states, self.k_channel_states]
-            for array_idx, state_idx, change in state_updates:
-                channel_arrays[array_idx][state_idx] += change
 
     def simulate(self,
                  t_array: np.ndarray,
                  stimulus_current_func: Callable[[float], float]
                  ) -> np.ndarray:
-        """
-        Runs the simulation.
-
-        Args:
-            t_array: Array of time points for the simulation (ms).
-            stimulus_current_func: A function I(t) that returns the stimulus
-                                   current (µA/cm²) at time t.
-
-        Returns:
-            A NumPy array containing the simulation output, with columns for
-            [time, voltage, Na_open_fraction, K_open_fraction].
-        """
-        dt = t_array[1] - t_array[0]
-        num_steps = len(t_array)
-        
-        v_membrane = self.v_rest
-        
-        # Preallocate output array
-        output = np.zeros((num_steps, 4))
-        output[0, 0] = t_array[0]
-        output[0, 1] = v_membrane
-        output[0, 2] = self.na_channel_states[3, 1] / self.n_na
-        output[0, 3] = self.k_channel_states[4] / self.n_k
-
-        for i in range(1, num_steps):
-            t_prev = t_array[i - 1]
-
-            # Update channel states using Gillespie algorithm
-            self._gillespie_step(v_membrane, t_prev, dt)
-            
-            na_open_fraction = self.na_channel_states[3, 1] / self.n_na
-            k_open_fraction = self.k_channel_states[4] / self.n_k
-            
-            # Update membrane potential using exponential Euler
-            i_na = self.g_na * na_open_fraction * (v_membrane - self.e_na)
-            i_k = self.g_k * k_open_fraction * (v_membrane - self.e_k)
-            i_l = self.g_l * (v_membrane - self.e_l)
-            i_stim = stimulus_current_func(t_prev)
-            
-            dv_dt = (i_stim - (i_na + i_k + i_l)) / self.c_m
-            v_membrane += dt * dv_dt 
-            
-            # Results
-            output[i, 0] = t_array[i]
-            output[i, 1] = v_membrane
-            output[i, 2] = na_open_fraction
-            output[i, 3] = k_open_fraction
-            
-        return output
+        return markov_hh(
+            t=t_array,
+            Ifunc=stimulus_current_func,
+            NNa=self.n_na,
+            NK=self.n_k,
+            gNa=self.g_na,
+            gK=self.g_k,
+            gL=self.g_l
+        )
