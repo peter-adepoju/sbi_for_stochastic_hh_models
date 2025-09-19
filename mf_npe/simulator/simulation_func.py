@@ -3,8 +3,8 @@
 """
 Provides a wrapper to connect the Hodgkin-Huxley simulators with the sbi package.
 
-The SimulationWrapper class is the main entry point. It is initialized with all simulation parameters and
-can then be called like a function, making it directly compatible with sbi's `simulate_for_sbi`.
+The SimulationWrapper class is the main entry point. It is initialized with all simulation parameters 
+and can then be called like a function, making it directly compatible with sbi's `simulate_for_sbi`.
 """
 
 from typing import Dict, Any
@@ -35,7 +35,6 @@ class SimulationWrapper:
         """
         self.config = config
         self.key = key
-        self.fidelity = self.config.get("fidelity", "lf").lower()
 
         sim_params = self.config.get("simulation", {})
         dt = sim_params.get("dt", 0.01)
@@ -43,27 +42,27 @@ class SimulationWrapper:
         self.t_array_np = np.arange(0.0, t_max + dt, dt)
         self.t_array_jnp = jnp.array(self.t_array_np)
 
-        if self.fidelity.startswith("hf"):
-            hf_params = self.config.get("hf_specific", {})
-            self.simulator = MarkovHHSimulator(
-                n_na_channels=hf_params.get("NNa", 6000),
-                n_k_channels=hf_params.get("NK", 1800)
-            )
-        else:
-            lf_params = self.config.get("lf_specific", {})
-            self.simulator = NoisyHHSimulator(
-                sigma=lf_params.get("sigma", 2.0)
-            )
+        hf_params = self.config.get("hf_specific", {})
+        self.hf_simulator = MarkovHHSimulator(
+            n_na_channels=hf_params.get("NNa", 6000),
+            n_k_channels=hf_params.get("NK", 1800)
+        )
+        
+        lf_params = self.config.get("lf_specific", {})
+        self.lf_simulator = NoisyHHSimulator(
+            sigma=lf_params.get("sigma", 2.0)
+        )
+        # -------------------------------------------
 
     def _run_lf(self, theta: Tensor) -> np.ndarray:
-        """Runs the low-fidelity JAX-based simulator."""
+        """Runs the low-fidelity JAX-based simulator for a given theta."""
         self.key, subkey = jax_random.split(self.key)
         gNa, gK, gL = theta.tolist()
         
-        self.simulator.g_na, self.simulator.g_k, self.simulator.g_l = gNa, gK, gL
+        self.lf_simulator.g_na, self.lf_simulator.g_k, self.lf_simulator.g_l = gNa, gK, gL
         
         stim_params = self.config.get("stimulus", {})
-        _, v_trace = self.simulator.simulate(
+        _, v_trace = self.lf_simulator.simulate(
             key=subkey,
             t_array=self.t_array_jnp,
             i_amp=stim_params.get("amp", 10.0),
@@ -73,15 +72,15 @@ class SimulationWrapper:
         return np.array(v_trace)
 
     def _run_hf(self, theta: Tensor) -> np.ndarray:
-        """Runs the high-fidelity NumPy-based simulator."""
+        """Runs the high-fidelity NumPy-based simulator for a given theta."""
         gNa, gK, gL = theta.tolist()
 
-        self.simulator.g_na, self.simulator.g_k, self.simulator.g_l = gNa, gK, gL
+        self.hf_simulator.g_na, self.hf_simulator.g_k, self.hf_simulator.g_l = gNa, gK, gL
         hf_params = self.config.get("hf_specific", {})
         base_NNa = hf_params.get("NNa", 6000)
         base_NK = hf_params.get("NK", 1800)
-        self.simulator.n_na = int(base_NNa * gNa / 120.0)
-        self.simulator.n_k = int(base_NK * gK / 36.0)
+        self.hf_simulator.n_na = int(base_NNa * gNa / 120.0)
+        self.hf_simulator.n_k = int(base_NK * gK / 36.0)
 
         stim_params = self.config.get("stimulus", {})
         def stimulus_func(time: float) -> float:
@@ -90,7 +89,7 @@ class SimulationWrapper:
             amp = stim_params.get("amp", 10.0)
             return amp if delay <= time < (delay + dur) else 0.0
 
-        sim_output = self.simulator.simulate(
+        sim_output = self.hf_simulator.simulate(
             t_array=self.t_array_np,
             stimulus_current_func=stimulus_func,
         )
@@ -100,15 +99,12 @@ class SimulationWrapper:
         """
         The main simulation entry point for `sbi`.
 
-        Args:
-            theta: A tensor of parameters (g_Na, g_K, g_L).
-            **kwargs: Catches additional arguments passed by `sbi`, such as
-                `noise` or `cell`, which are not used by this simulator.
-
-        Returns:
-            A NumPy array of the summary statistics for the simulation.
+        This method runs the default simulator specified by the `fidelity`
+        key in its configuration and returns the summary statistics.
         """
-        if self.fidelity.startswith("hf"):
+        fidelity = self.config.get("fidelity", "lf").lower()
+
+        if fidelity.startswith("hf"):
             voltage_trace = self._run_hf(theta)
         else:
             voltage_trace = self._run_lf(theta)
