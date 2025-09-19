@@ -1,0 +1,31 @@
+Metadata-Version: 2.4
+Name: mf_npe
+Version: 0.1.0
+Summary: Multifidelity Simulation-Based Inference for Stochastic Neuron Models
+Home-page: https://github.com/peter-adepoju/AIMS-Final-project
+Author: Peter Oluwafemi Adepoju
+Author-email: petera@aims.ac.za
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Intended Audience :: Science/Research
+Classifier: Topic :: Scientific/Engineering
+Requires-Python: >=3.10
+Requires-Dist: torch==2.1.0
+Requires-Dist: numpy==1.26.0
+Requires-Dist: jax==0.4.16
+Requires-Dist: jaxlib==0.4.16
+Requires-Dist: sbi==0.22.0
+Requires-Dist: pandas==2.1.1
+Requires-Dist: matplotlib==3.8.0
+Requires-Dist: seaborn==0.13.0
+Requires-Dist: plotly==5.17.0
+Requires-Dist: pyyaml==6.0.1
+Requires-Dist: tqdm==4.66.1
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
