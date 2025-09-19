@@ -5,6 +5,7 @@ Utility functions for building and configuring Zuko-based normalizing flows
 for simulation-based inference (SBI), including support for multifidelity models.
 """
 
+import copy
 import logging
 from typing import Union
 
@@ -22,7 +23,6 @@ from zuko.transforms import AffineTransform
 # The standardization logic (Standardize class and z_standardization function) is adapted from the sbi package's utilities to work with the Zuko backend.
 # See: https://github.com/sbi-dev/sbi/blob/main/sbi/utils/sbiutils.py
 
-
 class Standardize(nn.Module):
     """A simple torch module to z-score tensors."""
 
@@ -35,7 +35,6 @@ class Standardize(nn.Module):
         """
         super().__init__()
         mean, std = map(torch.as_tensor, (mean, std))
-        # Register as buffers so they are moved to the correct device (e.g., GPU) with the model, but are not considered model parameters for training.
         self.register_buffer("_mean", mean)
         self.register_buffer("_std", std)
 
@@ -51,17 +50,6 @@ def z_standardization(
 ) -> tuple[Tensor, Tensor]:
     """
     Computes mean and standard deviation for z-scoring from a batch of data.
-
-    Args:
-        batch_t: Batched tensor from which to compute statistics.
-        structured_dims: If True, treats dimensions as structured (e.g., time-series)
-                         and computes a single mean and std for the entire batch.
-                         If False (default), z-scores each feature dimension independently.
-        min_std: A minimum value to clamp the standard deviation to, preventing
-            division by zero.
-
-    Returns:
-        A tuple containing the computed mean and standard deviation.
     """
     if batch_t.ndim == 1:
         batch_t = batch_t.unsqueeze(0)
@@ -93,14 +81,6 @@ def standardizing_transform_zuko(
 ) -> UnconditionalTransform:
     """
     Builds a z-scoring AffineTransform for use in Zuko flows.
-
-    Args:
-        batch_t: Batched tensor from which mean and std deviation are computed.
-        structured_dims: See `z_standardization`.
-        min_std:  See `z_standardization`.
-
-    Returns:
-         A Zuko UnconditionalTransform that performs z-scoring.
     """
     t_mean, t_std = z_standardization(batch_t, structured_dims, min_std)
 
@@ -133,77 +113,54 @@ def build_zuko_flow(
 ) -> ZukoFlow:
     """
     Constructs a Zuko-based normalizing flow for density estimation.
-
-    This function handles standard and multifidelity setups.
-
-    Args:
-        batch_theta: A batch of parameters (`theta`) for shape inference.
-        batch_x: A batch of data (`x`) for shape inference and standardization.
-        embedding_net: The neural network to process `x` and generate context for the flow.
-        z_score_theta: Whether to apply z-scoring to the parameters `theta`.
-        z_score_x: Whether to apply z-scoring to the data `x`.
-        prior: The prior distribution for the parameters. Used to define bounds for the logit transform if applicable.
-        hidden_features: The number of hidden units in the transforms.
-        num_transforms: The number of transform layers in the flow.
-        num_bins: The number of bins for Neural Spline Flows (NSF).
-        nf_type: The type of normalizing flow. Supports "NSF" (standard), "NSF_LF" (low-fidelity pre-training), and "NSF_HF" (high-fidelity fine-tuning).
-        base_model: A pre-trained flow, required when `nf_type` is "NSF_HF".
-        device: The torch device to move the model to.
-
-    Returns:
-        A `ZukoFlow` object ready for training.
-
-    Raises:
-        NotImplementedError: If an unsupported `nf_type` is provided.
-        ValueError: If `base_model` is not provided for "NSF_HF".
     """
     theta_numel = batch_theta.shape[-1]
     embedded_x_numel = embedding_net(batch_x).shape[-1]
 
-    # The core of the flow is a Neural Spline Flow (NSF).
     if nf_type in ("NSF", "NSF_LF"):
         flow_core = zuko.flows.NSF(
             features=theta_numel,
             context=embedded_x_numel,
             bins=num_bins,
             transforms=num_transforms,
-            hidden_features=[hidden_features] * num_transforms)
-
+            hidden_features=[hidden_features] * num_transforms,
+        )
     elif nf_type == "NSF_HF":
-        # For high-fidelity fine-tuning, reuse the transforms from the pre-trained model.
         if base_model is None:
             raise ValueError("A `base_model` must be provided for NSF_HF fine-tuning.")
-
-        # We re-use all the core NSF transforms from the pre-trained model.
-        # Any pre-processing layers from the original model are not part of the `base_model.net.transform.transforms` list, so we can use them directly.
-        pre_trained_transforms = base_model.net.transform.transforms
-
-        flow_core = zuko.flows.Flow(transform=pre_trained_transforms, base=base_model.net.base)
-
+        
+        # For fine-tuning, create a new instance of the flow with the same architecture as the base model. 
+        # We will load the pre-trained weights later.
+        lf_flow_transforms = base_model.net.transform.transforms
+        flow_core = zuko.flows.Flow(
+            transform=[copy.deepcopy(t) for t in lf_flow_transforms],
+            base=copy.deepcopy(base_model.net.base),
+        )
     else:
         raise NotImplementedError(f"Normalizing flow type '{nf_type}' not implemented.")
 
-    # A list to hold all transformations, starting with the core flow's transforms.
-    # We will prepend pre-processing transforms to this list.
     all_transforms = list(flow_core.transform.transforms)
 
-    # The order is important: theta is first transformed to be unconstrained (logit), then standardized (z-score).
     if z_score_theta:
         all_transforms.insert(0, standardizing_transform_zuko(batch_theta))
 
-    # Check if the prior has finite support to apply a logit transform.
     if prior.support.is_bounded:
         transform = mcmc_transform(prior)
-        # Wrap the sbi transform so it can be used in a Zuko flow.
         all_transforms.insert(0, UnconditionalTransform(lambda: transform, buffer=True))
 
     if z_score_x:
-        # If z-scoring `x`, wrap the embedding_net in a sequence. This computes stats from `batch_x` and creates a standardization layer.
         standardization_layer = Standardize(*z_standardization(batch_x))
         embedding_net = nn.Sequential(standardization_layer, embedding_net)
 
-    # Assemble the final flow with all transformations and the base distribution.
     neural_net = Flow(transform=all_transforms, base=flow_core.base).to(device)
+    
+    if nf_type == "NSF_HF":
+        print("Transferring weights from pre-trained LF model...")
+        lf_state_dict = base_model.state_dict()
+        neural_net.load_state_dict(lf_state_dict, strict=False)
 
-    # Wrap the Zuko flow into an sbi-compatible object. 
-    return ZukoFlow(flow=neural_net, embedding_net=embedding_net, theta_shape=batch_theta[0].shape, x_shape=batch_x[0].shape)
+    return ZukoFlow(
+        flow=neural_net,
+        embedding_net=embedding_net,
+        theta_shape=batch_theta[0].shape,
+        x_shape=batch_x[0].shape)
