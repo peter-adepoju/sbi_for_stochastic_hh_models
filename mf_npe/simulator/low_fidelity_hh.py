@@ -25,28 +25,24 @@ from jax import jit, lax, random
 
 def _Exp(z: jnp.ndarray) -> jnp.ndarray:
     """Clips input to jnp.exp to avoid overflow."""
-    return jnp.exp(jnp.clip(z, -500, 500))
+    return jnp.exp(jnp.clip(z, -500, None))
 
-def _efun(z: jnp.ndarray) -> jnp.ndarray:
+def _efun(x, y) -> jnp.ndarray:
     """Numerically stable version of z / (exp(z) - 1)."""
-    return jnp.where(
-        jnp.abs(z) < 1e-6,
-        1 - z / 2,  # Taylor expansion for small z
-        z / (_Exp(z) - 1)
-    )
+    return jnp.where(jnp.abs(x / y) < 1e-6, y * (1 - x / (2 * y)), x / (_Exp(x / y) - 1))
 
 # --- Rate functions for gating variables (m, h, n) ---
 # Defined on relative voltage V_rel = V - V_rest
 
-def _alpha_m(V_rel: float) -> float: return 10.0 * _efun((V_rel - 25.0) / -10.0)
-def _beta_m(V_rel: float) -> float:  return 4.0 * _Exp(V_rel / -18.0)
-def _alpha_h(V_rel: float) -> float: return 0.07 * _Exp(V_rel / -20.0)
-def _beta_h(V_rel: float) -> float:  return 1.0 / (_Exp((V_rel - 30.0) / 10.0) + 1.0)
-def _alpha_n(V_rel: float) -> float: return 1.0 * _efun((V_rel - 10.0) / -10.0)
-def _beta_n(V_rel: float) -> float:  return 0.125 * _Exp(V_rel / -80.0)
+def _alpha_m(V: float) -> float: return 0.1 * _efun(25.0 - V, 10.0)
+def _beta_m(V: float) -> float:  return 4.0 * _Exp(-V / 18.0)
+def _alpha_h(V: float) -> float: return 0.07 * _Exp(- V / 20.0)
+def _beta_h(V: float) -> float:  return 1.0 / (_Exp((30.0 - V) / 10.0) + 1.0)
+def _alpha_n(V: float) -> float: return 0.01 * _efun(10.0 - V, 10.0)
+def _beta_n(V: float) -> float:  return 0.125 * _Exp(- V / 80.0)
 
-def _tau_x(alpha_func, beta_func, V_rel): return 1.0 / (alpha_func(V_rel) + beta_func(V_rel))
-def _x_inf(alpha_func, beta_func, V_rel): return alpha_func(V_rel) * _tau_x(alpha_func, beta_func, V_rel)
+def _tau_x(alpha_func, beta_func, V): return 1.0 / (alpha_func(V) + beta_func(V))
+def _x_inf(alpha_func, beta_func, V): return alpha_func(V) * _tau_x(alpha_func, beta_func, V)
 
 
 class NoisyHHSimulator:
@@ -119,13 +115,13 @@ class NoisyHHSimulator:
             v_new = v_det + (self.sigma / self.c_m) * jnp.sqrt(dt) * noise_t
 
             # Gating variable updates (exponential Euler)
-            v_rel_new = v_new - self.v_rest
-            m_inf = _x_inf(_alpha_m, _beta_m, v_rel_new)
-            h_inf = _x_inf(_alpha_h, _beta_h, v_rel_new)
-            n_inf = _x_inf(_alpha_n, _beta_n, v_rel_new)
-            m_new = m_inf + (m_prev - m_inf) * _Exp(-dt / _tau_x(_alpha_m, _beta_m, v_rel_new))
-            h_new = h_inf + (h_prev - h_inf) * _Exp(-dt / _tau_x(_alpha_h, _beta_h, v_rel_new))
-            n_new = n_inf + (n_prev - n_inf) * _Exp(-dt / _tau_x(_alpha_n, _beta_n, v_rel_new))
+            v_rel = v_new - self.v_rest
+            m_inf = _x_inf(_alpha_m, _beta_m, v_rel)
+            h_inf = _x_inf(_alpha_h, _beta_h, v_rel)
+            n_inf = _x_inf(_alpha_n, _beta_n, v_rel)
+            m_new = m_inf + (m_prev - m_inf) * _Exp(-dt / _tau_x(_alpha_m, _beta_m, v_rel))
+            h_new = h_inf + (h_prev - h_inf) * _Exp(-dt / _tau_x(_alpha_h, _beta_h, v_rel))
+            n_new = n_inf + (n_prev - n_inf) * _Exp(-dt / _tau_x(_alpha_n, _beta_n, v_rel))
 
             new_carry = (v_new, m_new, h_new, n_new)
             output = v_new  
@@ -142,6 +138,7 @@ class NoisyHHSimulator:
         noise = random.normal(key, shape=t_array.shape)
 
         # Run simulation
-        final_state, v_trace = jit(lax.scan)(_step_func, initial_state, (i_ext, noise))
+        scan_jitted = jit(lax.scan, static_argnums=(0,))
+        final_state, v_trace = scan_jitted(_step_func, initial_state, (i_ext, noise))
 
         return t_array, v_trace
