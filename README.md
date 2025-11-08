@@ -16,16 +16,6 @@ The voltage across the membranes of individual neurons is inherently stochastic,
 
 ---
 
-## Key Results
-
-Our primary finding is that the multifidelity approach (MF-NPE) can produce posterior distributions that are as accurate (or more accurate) than those from a standard Neural Posterior Estimator (NPE), while using significantly fewer computationally expensive, high-fidelity simulations.
-
-| ![NLTP Comparison](results/nltp_comparison.png) | ![Posterior Comparison](results/posterior_comparison.png) |
-|:---:|:---:|
-| **Figure 1: NLTP Performance.** Negative Log-Probability of the True Parameters (NLTP, lower is better) vs. Methods. MF-NPE variants consistently outperform standard NPE. | **Figure 2: Posterior Accuracy.** Pairwise posteriors for MF-NPE (right) are sharper and more accurate than for standard NPE (left), despite using 10x fewer high-fidelity simulations. |
-
----
-
 ## Setup and Installation
 
 ### 1. Prerequisites
