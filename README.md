@@ -63,22 +63,7 @@ It is highly recommended to use a virtual environment to manage dependencies.
     pip install -r requirements.txt
     ```
 
-**Note:** This repository includes a local copy of the `sbi` library to ensure version consistency and reproducibility. The code imports directly from this local copy.
-
 ---
-
-## Citing this Work
-If you use this code or the ideas presented in this project for your research, please cite the original thesis:
-
-```bibtex
-@mastersthesis{Adepoju2025,
-  author       = {Adepoju, Peter Oluwafemi},
-  title        = {Efficient Inference of Stochastic Models of Single Neurons with Multifidelity Simulation-Based Inference},
-  school       = {African Institute for Mathematical Sciences (AIMS) South Africa},
-  year         = {2025},
-  month        = {July}
-}
-```
 
 ## Acknowledgements
 This work was supervised by Prof. Pedro Gonçalves (VIB-Neuroelectronics Research Flanders, KU Leuven, Belgium).
