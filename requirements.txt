@@ -1,27 +1,17 @@
-# Requirements for the AIMS Final Project on Multifidelity SBI
-#
 # To install all dependencies, create a virtual environment and run:
 # pip install -r requirements.txt
 
-# Core deep learning and numerical libraries
+# Core libraries
 torch==2.1.0
 numpy==1.26.0
 jax==0.4.16
 jaxlib==0.4.16
-
-# Simulation-based inference library
-# Note: This project also includes a local ("vendored") copy of SBI
-# to ensure stability. Installing it here is good practice.
-sbi==0.22.0
-
-# Data manipulation and plotting
 pandas==2.1.1
 matplotlib==3.8.0
 seaborn==0.13.0
 plotly==5.17.0
-
-# Configuration file parsing
-pyyaml==6.0.1
-
-# Progress bars (used by sbi and helpful for development)
 tqdm==4.66.1
+
+# This project also includes a local ("vendored") copy of SBI
+sbi==0.22.0
+
